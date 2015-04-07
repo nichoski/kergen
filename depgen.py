@@ -1,0 +1,405 @@
+import itertools
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('options_list', help='Kernel option(s) to check for dependencies', nargs='+')
+args = parser.parse_args()
+
+config = []
+with open('/usr/src/linux/.config', 'r') as conf:
+    for line in conf:
+        if line[:1] != '#':
+            config.append(line[7:-3])
+
+#load and return the needed info from all the Kconfig files in the kernel sources
+def load_kconf_info(kconf_path):
+    with open('/usr/src/linux/' + kconf_path, 'r') as kconf:
+        kconf_info_list = []
+        prepend_to_line = ''
+        is_config_block = False
+        is_menu = False
+        menu_conditions = []
+
+        for line in kconf:
+            #check if it's a new line or continuation of the previous one
+            if prepend_to_line:
+                line = prepend_to_line + line.replace('\t','')
+                prepend_to_line = ''
+            #check if the current line continues in the next one too
+            if len(line) > 1 and line[-2] == '\\':
+                prepend_to_line += line[:-2]
+                continue
+
+            #load the Kconf files
+            if line[:7] == 'source ':
+                line = line[7:-1]
+                if line.startswith('"'):
+                    line = line[1:-1]
+                    kconf_info_list += load_kconf_info(line)
+                continue
+
+            #start a config block
+            def start_config_block():
+                nonlocal is_config_block, is_menu
+                is_config_block = True
+                kconf_info_list.append([])
+                is_menu = False
+            if line[:7] == 'config ':
+                start_config_block()
+                kconf_info_list[-1].append(line[7:-1])
+            elif line[:11] == 'menuconfig ':
+                start_config_block()
+                kconf_info_list[-1].append(line[11:-1])
+            elif line[:3] == 'if ' or line[:5] == 'endif' or line[:6] == 'choice' or line[:9] == 'endchoice':
+                start_config_block()
+                kconf_info_list[-1].append(line[:-1])
+
+            #deal with menu blocks
+            elif line[:5] == 'menu ':
+                is_menu = True
+                menu_conditions.append(0)
+            elif line[:7] == 'endmenu':
+                for i in range(menu_conditions[-1]):
+                    kconf_info_list.append(['endif'])   
+                menu_conditions.pop()
+            elif is_menu == True and line[:9] == '\tdepends ':
+                kconf_info_list.append(['if ' + line[12:-1]])
+                menu_conditions[-1] += 1
+
+            #deal with non config block
+            elif not is_config_block:
+                pass
+            elif line[:8] == 'comment ':
+                is_menu = False
+                is_config_block = False
+
+            #store select and depends statements
+            elif line[:8] =='\tselect ' or line[:9] == '\tdepends ':
+                kconf_info_list[-1].append(line[:-1])
+        return kconf_info_list
+
+
+class PossibleLists:
+    def __init__(self, option, possible_deps_lists):
+        self.name = option
+        self.lines = possible_deps_lists
+    def __str__(self):
+        string = self.name + ':'
+        for line in self.lines:
+            string += '\n' + ', '.join(line)
+        string += '\n------------------------------------------------------------------------------------------'
+        return string
+
+
+class Depgen:
+    def __init__(self, kconf_info_list, config, given_options):
+        self.kconf_info_list = kconf_info_list
+        self.given_options = given_options
+        self.possible_lists = []
+        self.dep_expression_blocks = [] #a list to store dependency expression sets
+        self.ifdep = [] #a list to temporarily store 'if' dependency sets
+        self.message = ''
+        self.unsatisfied_options = []
+        self.possible_final_lists = []
+        self.final_deps = []
+
+        self.remove_already_satisfied_options()
+        self.get_dep_expressions()
+
+        #generate possible_lists
+        for dep_expressions_block in self.dep_expression_blocks:
+            self.possible_lists.append(PossibleLists(dep_expressions_block[0],
+                                       self.evaluate_dep_expressions(dep_expressions_block[1:])))
+        self.validate_possible_lists_against_config()
+        self.check_for_deps_of_deps()
+        self.validate_possible_lists_against_itself()
+        self.gen_possible_final_lists()
+        if self.possible_final_lists:
+            self.final_deps = [dep for dep in self.possible_final_lists[0] if dep and dep[0] != '!']
+        else:
+            self.final_deps = []
+
+    #takes a config_block from kconf_info_list and stores its dependencies in a dep_expression_set
+    def store_block(self, config_block):
+        self.dep_expression_blocks.append([config_block[0]]+self.ifdep)
+        for line in config_block:
+            if line[:4] == '\tdep':
+                self.dep_expression_blocks[-1].append('('+line[12:].replace(' ','')+')')
+            elif line[:4] =='\tsel':
+                select_option = self.select_to_dep(line[8:])
+                if select_option:
+                    self.dep_expression_blocks[-1].append(select_option)
+
+    #checks kconf_info_list, and using store_block saves the dependencies for every option of given_options
+    def get_dep_expressions(self):
+        for config_block in self.kconf_info_list:
+            if config_block[0][:3] == 'if ':
+                self.ifdep.append('(' + config_block[0][3:].replace(' ','') + ')')
+            elif config_block[0][:5] == 'endif':
+                self.ifdep.pop()
+            else:
+                for config_option in self.given_options:
+                    if config_block[0] == config_option:
+                        self.store_block(config_block)
+                        continue
+
+    #takes a dependency expressions list and returns a list of possible option sets
+    def evaluate_dep_expressions(self, dep_expressions_block):
+        possible_lists_for_block = [dep_expressions_block]
+        #split string in a list of words on every '&&' operator,
+        #start a separate list on every '||' operator,
+        #treat every brackets block as a single word
+        def parse_dep(deps_string):
+            parsed_dep=[[]]
+            word_start = i = brackets_block_depth = 0
+            last_index = len(deps_string) - 1
+
+            def negate_word(word):
+                word = word[1:]
+                if word[1] == '!':
+                    word = word[:1] + word[2:]
+                else:
+                    word = word[:1] + '!' + word[1:]
+                i = 1
+                brackets_block_depth = 0
+                length = len(word) - 1
+                def reverse_exclamation():
+                    nonlocal word, i
+                    if word[i+2] == '!':
+                        word = word[:i+2] + word[i+3:]
+                        i += 2
+                    else:
+                        word = word[:i+2] + '!' + word[i+2:]
+                        i += 3
+                while i < length:
+                    if word[i] == '(':
+                        brackets_block_depth += 1
+                    elif brackets_block_depth > 0:
+                        if word[i] == ')':
+                            brackets_block_depth -= 1
+                    elif word[i] == '&':
+                        word = word[:i] + '||' + word[i+2:]
+                        reverse_exclamation()
+                        continue
+                    elif word[i] == '|':
+                        word = word[:i] + '&&' + word[i+2:]
+                        reverse_exclamation()
+                        continue
+                    i += 1
+                return word
+      
+            def new_word():
+                nonlocal i, word_start
+                word = deps_string[word_start:i]
+                if word[:2] == '!(':
+                    word = negate_word(word)
+                parsed_dep[-1].append(word)
+                i += 2
+                word_start = i
+
+            while i <= last_index:
+                #treating brackets blocks as one word
+                if deps_string[i] == '(':
+                    brackets_block_depth += 1
+                elif brackets_block_depth > 0:
+                    if deps_string[i] == ')':
+                        brackets_block_depth -= 1
+
+                #starting and ending words
+                elif deps_string[i] == '&':
+                    new_word()
+                    continue
+                elif deps_string[i] == '|':
+                    new_word()
+                    parsed_dep.append([])
+                    continue
+                i += 1
+            new_word()
+            return parsed_dep
+
+        #use parse_dep() on every item in deps containing complex expression (i.e. items enclosed in '()')
+        #until there are no complex expressions.
+        for line in possible_lists_for_block:
+            for expression in line:
+                if expression[0] == '(':
+                    temp_line = parse_dep(expression[1:-1])
+                    line.remove(expression)
+                    for temp_expression in temp_line:
+                        possible_lists_for_block.append(temp_expression+line)
+                    line.clear()
+        possible_lists_for_block = [line for line in possible_lists_for_block if line]
+
+        #standardize negation/affirmation
+        for line in possible_lists_for_block:
+            for i, dependency in enumerate(line):
+                if '=' in line[i]:
+                    if line[i][-2:] == '=y' or line[i][-2:] == '=m':
+                        line[i] = line[i][:-2]
+                    elif line[i][-2:] == '=n':
+                        line[i] = '!' + line[i][:-2]
+                    if line[i][-1] == '!':
+                        line[i] = line[i][:-1]
+                    if line[i][:2] == '!!':
+                        line[i] = line[i][2:]
+                    if '=' in line[i]:
+                        line.append(line[i][:line[i].find('=')])
+                        line[i] = line[i][line[i].find('=')+1:]
+        return possible_lists_for_block
+
+    #gets a select expression line, evaluates it and returns a select option(if its condition is satisfied) or an empty string
+    def select_to_dep(self, line):
+        if ' if ' in line:
+            option = line[:line.find(' if ')]
+            dep_expression = line[line.find(' if ')+4:].replace(' ','')
+            dep_list = self.evaluate_dep_expressions([dep_expression])
+
+            for possible_deps in dep_list:
+                are_we_satisfied = True
+                for item in possible_deps:
+                    if not item in config:
+                        are_we_satisfied = False
+                if are_we_satisfied:
+                    return option
+            return ''
+        else:
+            option = line
+        return option
+
+    #checks dependencies for kernel config options
+    def remove_already_satisfied_options(self):
+        #remove the already satisfied options from the list
+        for option in self.given_options[:]:
+            if option in config:
+                self.given_options.remove(option)
+
+    #check the .config, remove already satisfied deps, and remove options whose deps can't be satisfied
+    def validate_possible_lists_against_config(self):
+        for option in self.possible_lists[:]:
+            for line in option.lines[:]:
+                for dependency in line[:]:
+                    if dependency[0] == '!':
+                        if dependency[1:] in config:
+                            option.lines.remove(line)
+                            if not option.lines:
+                                self.message += '/usr/src/linux/.config has ' + dependency[1:] \
+                                                + ' set. ' + option.name + ' can not be added.\n'
+                                self.remove_unsatisfied_option(option)
+                    else:
+                        if dependency in config:
+                            line.remove(dependency)
+
+    def remove_unsatisfied_option(self, option):
+        self.unsatisfied_options.append(option.name)
+        self.possible_lists.remove(option)
+
+    def check_for_deps_of_deps(self):
+        for option in self.possible_lists[:]:
+            for line in option.lines[:]:
+                if line:
+                    temp = Depgen(self.kconf_info_list, config, line)
+                    if temp.unsatisfied_options:
+                        option.lines.remove(line)
+                        if not option.lines:
+                            self.message += temp.message + option.name \
+                                            + ' can not be added because the following options are not satisfied: ' \
+                                            + ', '.join(temp.unsatisfied_options) + '\n'
+                            self.remove_unsatisfied_option(option)
+                    else:
+                        if temp.possible_final_lists:
+                            line += temp.possible_final_lists[0]
+
+    #checks if a dependency exists in any line of any option
+    def is_in_any_line_of_any_option(self, neg_dependency):
+        for option in self.possible_lists[:]:
+            for line in option.lines[:]:
+                if neg_dependency in line:
+                    return True
+        return False
+
+    #returns a list of options whose every line in self.possible_lists contains a dep
+    def options_needing_the_neg_dep(self, neg_dependency):
+        options_needing_the_neg_dep = []
+        for option in self.possible_lists[:]:
+            is_in_all_lines = True
+            for line in option.lines[:]:
+                if neg_dependency not in line:
+                    is_in_all_lines = False
+                    break
+            if is_in_all_lines:
+                options_needing_the_neg_dep.append(option.name)
+        return options_needing_the_neg_dep
+
+    def remove_lines_containing(self, neg_dependency):
+         for option in self.possible_lists[:]:
+            for line in option.lines[:]:       
+                if neg_dependency in line:
+                    option.remove(line)
+
+    #checks self.possible_lists for any conflicting dependencies of options
+    def validate_possible_lists_against_itself(self):
+        for option in self.possible_lists[:]:
+            for line in option.lines[:]:
+                for dependency in line[:]:
+                    if dependency[0] == '!':
+                        if dependency[1:] in self.given_options:
+                            option.lines.remove(line)
+                            if not option.lines:
+                                self.message += option.name + ' can not be added because ' + dependency[1:] \
+                                                + ' is in the given options.\n'
+                                self.remove_unsatisfied_option(option)
+                        elif self.is_in_any_line_of_any_option(dependency[1:]):
+                            options_needing_the_neg_dep = self.options_needing_the_neg_dep(dependency[1:])
+                            if options_needing_the_neg_dep:
+                                option.lines.remove(line)
+                                if not option.lines:
+                                    self.message += option.name + ' can not be added because ' + dependency[1:] \
+                                                    + ' is needed by ' + ', '.join(options_needing_the_neg_dep) + '\n'
+                                    self.remove_unsatisfied_option(option)
+                            else:
+                                self.remove_lines_containing(dependency[1:])
+                    else:
+                        if dependency in self.given_options:
+                            line.remove(dependency)
+
+    #from possible lists make every possible combination of lists and remove duplicate elements
+    def gen_possible_final_lists(self):
+        temp_lists = [option.lines for option in self.possible_lists]
+        self.possible_final_lists = [list(set(sum(elements, []))) for elements in itertools.product(*temp_lists)]
+        self.possible_final_lists.sort(key=len)
+
+
+#I will put some code here later to determine the architecture directory and save it in the arch variable.
+arch = 'x86'
+kconf_info_list = load_kconf_info('arch/' + arch + '/Kconfig')
+
+options_list = [option[7:] for option in args.options_list]
+options_list = list(set(options_list))
+deps = Depgen(kconf_info_list, config, options_list)
+options_to_add = deps.final_deps + deps.given_options
+
+def query_yes_no(question):
+    print(question, end='')
+    while True:
+        answer = input().lower()
+        if answer == 'yes' or answer == 'y':
+            return True
+        elif answer == 'no' or answer == 'n':
+            return False
+        else:
+            print("Please respond with 'yes' or 'no' (or 'y' or 'n').")
+
+print(deps.message)
+if deps.final_deps:
+    print('Needed dependencies: ' + ', '.join(deps.final_deps))
+else:
+    print('No new dependencies are going to be added.')
+if deps.unsatisfied_options:
+    print('Unsatisfied options: ' + ', '.join(deps.unsatisfied_options))
+if options_to_add:
+    print('Options that will be added in the kernel config are: '+ ', '.join(options_to_add))
+    if query_yes_no('Do you want to add these options in the kernel config?[y/n]:'):
+        with open('/usr/src/linux/.config', 'a') as config_file:
+            for option in options_to_add:
+                config_file.write('CONFIG_' + option + '=y\n')
+else:
+    print('No options will be added in the kernel config.')
