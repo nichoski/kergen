@@ -12,10 +12,10 @@ Currently it takes care of all PCI, USB, SCSI, devices, and file system support,
 
 ## Usage
 kergen is called as root, and without arguments it does nothing. Here is a list of arguments and their functions:
--g, --generate   - Generate optimized kernel options for your hardware and add the non existing ones to .config
--n, --new        - Start from scratch without using any existing config files (runs 'make mrproper' and 'make defconfig')
--u, --upgrade    - Select the newest installed kernel version and if --new is not used copy the old .config file and run 'make olddefconfig'.
--m, --menuconfig - Opens a kernel configuration menu at the end of all other operations, but prior build
+-g, --generate   - Generate optimized kernel options for your hardware and add the non existing ones to .config  
+-n, --new        - Start from scratch without using any existing config files (runs 'make mrproper' and 'make defconfig')  
+-u, --upgrade    - Select the newest installed kernel version and if --new is not used copy the old .config file and run 'make olddefconfig'.  
+-m, --menuconfig - Opens a kernel configuration menu at the end of all other operations, but prior build  
 -b, --build      - Build a new kernel and copy it in /boot
 
 Optionally depgen and kergen-map can be used as standalone tools with the following functions:
