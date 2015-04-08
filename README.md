@@ -1,7 +1,7 @@
 # kergen
 Linux kernel config generator
 
-## What's it all about?
+## What's it all about
 Building your kernel from source, while practical, it is also a long and tedious task. 
 Looking up hardware information, searching for needed drivers, enabling each driver separately along with options each driver depends on, is a very long and boring task. However, like any other boring human work, it will eventually be automated. Kergen is a step in that direction.
 
@@ -9,6 +9,19 @@ Note that this application does not intend to completely replace the configurati
 There are many different ways in which a user would want to configure their kernel, and this application does not favor either.
 It will only add kernel options that it's 100% sure you will need. So mainly it will support all of your plugged in hardware, mounted file systems, etc. etc.
 Currently it takes care of all PCI, USB, SCSI, devices, and file system support, and works only on x86 architectures. In future versions, other types of hardware and architectures will be supported as well.
+
+## Usage
+kergen is called as root, and without arguments it does nothing. Here is a list of arguments and their functions:
+-g, --generate   - Generate optimized kernel options for your hardware and add the non existing ones to .config
+-n, --new        - Start from scratch without using any existing config files (runs 'make mrproper' and 'make defconfig')
+-u, --upgrade    - Select the newest installed kernel version and if --new is not used copy the old .config file and run 'make olddefconfig'.
+-m, --menuconfig - Opens a kernel configuration menu at the end of all other operations, but prior build
+-b, --build      - Build a new kernel and copy it in /boot
+
+Optionally depgen and kergen-map can be used as standalone tools with the following functions:
+kergen-map is called without arguments and returns a list of kernel options needed to satisfy the current hardware (at the moment it only works for PCI, USB, and SCSI hardware) and mounted filesystems.
+
+depgen accepts a list of kernel config options and returns a list of needed dependencies for those options. It also prompts the user asking whether or not to add those options along with the dependencies to the kernel .config file. Usage example:
 
 ## Structure and functions
 Kergen is split into three tools: kergen, kergen-map, and depgen

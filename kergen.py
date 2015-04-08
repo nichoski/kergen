@@ -3,11 +3,11 @@ import os
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-m', '--menuconfig', help='Opens a kernel configuration menu at the end of all other operations', action='store_true')
-parser.add_argument('-n', '--new',        help='Overwrite old config files (if any) without using them', action='store_true')
-parser.add_argument('-u', '--upgrade',    help='Select the newest installed kernel version and create a config file', action='store_true')
+parser.add_argument('-m', '--menuconfig', help='Opens a kernel configuration menu at the end of all other operations, but prior build', action='store_true')
+parser.add_argument('-n', '--new',        help='Start from scratch without using any existing config files (runs "make mrproper" and "make defconfig")', action='store_true')
+parser.add_argument('-u', '--upgrade',    help='Select the newest installed kernel version and if --new is not used copy the old .config file and run "make olddefconfig".', action='store_true')
 parser.add_argument('-b', '--build',      help='Build a new kernel and copy it in /boot', action='store_true')
-parser.add_argument('-g', '--generate',   help='Generate optimized kernel options for your hardware', action='store_true')
+parser.add_argument('-g', '--generate',   help='Generate optimized kernel options for your hardware and add the non existing ones to .config', action='store_true')
 args = parser.parse_args()
 
 if args.upgrade:
