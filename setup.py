@@ -3,8 +3,8 @@ from distutils.core import setup
 setup(
     name = 'kergen',
     scripts = ['kergen/kergen', 'kergen/kergen-map', 'kergen/depgen'],
-    data_files=[('.', ['kergen/modules.alias'])],
-    version = '1.0.0',
+    data_files=[('/usr/share/kergen', ['kergen/modules.alias'])],
+    version = '0.1.0',
     description = 'Linux kernel config generator',
     author = 'Pavel Nichoski',
     author_email = 'nichoski@gmail.com',
