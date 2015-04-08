@@ -21,7 +21,7 @@ kergen is called as root, and without arguments it does nothing. Here is a list 
 Optionally depgen and kergen-map can be used as standalone tools with the following functions:  
 kergen-map is called without arguments and returns a list of kernel options needed to satisfy the current hardware (at the moment it only works for PCI, USB, and SCSI hardware) and mounted filesystems.
 
-depgen accepts a list of kernel config options and returns a list of needed dependencies for those options. It also prompts the user asking whether or not to add those options along with the dependencies to the kernel .config file. Usage example:
+depgen accepts a list of kernel config options and returns a list of needed dependencies for those options. It also prompts the user asking whether or not to add those options along with the dependencies to the kernel .config file.
 
 ## Structure and functions
 Kergen is split into three tools: kergen, kergen-map, and depgen
