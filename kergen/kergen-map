@@ -114,7 +114,7 @@ def generate_device_kernel_options():
     all_pci_modules_list = []
     all_usb_modules_list = []
     all_scsi_modules_list = []
-    with open('modules.alias', 'r') as module_alias:
+    with open('/usr/share/kergen/modules.alias', 'r') as module_alias:
         for line in module_alias:
             if line[6:10] == 'usb:':
                 all_usb_modules_list.append(USB_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))

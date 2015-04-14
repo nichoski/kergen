@@ -47,8 +47,8 @@ if args.new or not os.path.isfile('/usr/src/linux/.config'):
     subprocess.check_call(['make', 'defconfig'], cwd='/usr/src/linux')
 
 if args.generate:
-    kernel_options = subprocess.check_output(['python', 'kergen-map.py'], universal_newlines=True)[:-1].split(' ')
-    subprocess.check_call(['python', 'depgen.py'] + kernel_options, universal_newlines=True)
+    kernel_options = subprocess.check_output(['python', 'kergen-map'], universal_newlines=True)[:-1].split(' ')
+    subprocess.check_call(['python', 'depgen'] + kernel_options, universal_newlines=True)
 
 if args.menuconfig:
     subprocess.check_call(['make', 'menuconfig'], cwd='/usr/src/linux')
