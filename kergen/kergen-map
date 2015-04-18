@@ -143,19 +143,32 @@ def generate_device_kernel_options():
 
     return kernel_options
 
+def load_possible_filesystems(kpath):
+    with open('/usr/src/linux/' + kpath, 'r') as kconf:
+        kconf_options_list = []
+
+        for line in kconf:
+            #load the Kconf files
+            if line[:7] == 'source ':
+                line = line[7:-1]
+                if line.startswith('"'):
+                    line = line[1:-1]
+                    kconf_options_list += load_possible_filesystems(line)
+
+            elif line[:7] == 'config ' and line[-4:-1] == '_FS':
+                kconf_options_list.append(line[7:-4].lower())
+
+        return kconf_options_list
+
 def generate_file_system_kernel_options():
-    fs_info = subprocess.check_output('mount | grep \/dev\/sd', shell=True, universal_newlines=True)[:-1]
-    fs_info = fs_info.split('\n')
-    options_list = []
-    for line in fs_info:
-        option = line[line.find(' type ')+6:]
-        option = option[:option.find(' ')].upper() + '_FS'
-        options_list.append(option)
-    options_list = list(set(options_list))
-    return options_list
+    possible_file_systems = load_possible_filesystems('arch/x86/Kconfig')
+    mounted_fs_info = subprocess.check_output(['cat', '/proc/mounts'], universal_newlines=True)
+    mounted_file_systems_options = [filesystem.upper() + '_FS' for filesystem in possible_file_systems if ' ' + filesystem + ' ' in mounted_fs_info]
+    return(mounted_file_systems_options)
 
 
 file_system_kernel_options = generate_file_system_kernel_options()
 device_kernel_options = generate_device_kernel_options()
 all_options = device_kernel_options + file_system_kernel_options
+all_options = list(set(all_options))
 print(' '.join(all_options))
