@@ -4,7 +4,7 @@ setup(
     name = 'kergen',
     scripts = ['kergen/kergen', 'kergen/kergen-map', 'kergen/depgen'],
     data_files=[('/usr/share/kergen', ['kergen/modules.alias'])],
-    version = '0.1.1',
+    version = '0.1.2',
     description = 'Linux kernel config generator',
     author = 'Pavel Nichoski',
     author_email = 'nichoski@gmail.com',
