@@ -2,83 +2,88 @@
 
 import itertools
 import argparse
+import os
 
 parser = argparse.ArgumentParser()
 parser.add_argument('options_list', help='Kernel option(s) to check for dependencies', nargs='+')
 args = parser.parse_args()
 
 config = []
-with open('/usr/src/linux/.config', 'r') as conf:
-    for line in conf:
-        if line[:1] != '#':
-            config.append(line[7:-3])
+if os.path.isfile('/usr/src/linux/.config'):
+    with open('/usr/src/linux/.config', 'r') as conf:
+        for line in conf:
+            if line[:1] != '#':
+                config.append(line[7:-3])
 
 #load and return the needed info from all the Kconfig files in the kernel sources
 def load_kconf_info(kconf_path):
-    with open('/usr/src/linux/' + kconf_path, 'r') as kconf:
-        kconf_info_list = []
-        prepend_to_line = ''
-        is_config_block = False
-        is_menu = False
-        menu_conditions = []
+    kconf_info_list = []
+    if os.path.isfile('/usr/src/linux/' + kconf_path):
+        with open('/usr/src/linux/' + kconf_path, 'r') as kconf:
+            prepend_to_line = ''
+            is_config_block = False
+            is_menu = False
+            menu_conditions = []
 
-        for line in kconf:
-            #check if it's a new line or continuation of the previous one
-            if prepend_to_line:
-                line = prepend_to_line + line.replace('\t','')
-                prepend_to_line = ''
-            #check if the current line continues in the next one too
-            if len(line) > 1 and line[-2] == '\\':
-                prepend_to_line += line[:-2]
-                continue
+            for line in kconf:
+                #check if it's a new line or continuation of the previous one
+                if prepend_to_line:
+                    line = prepend_to_line + line.replace('\t','')
+                    prepend_to_line = ''
+                #check if the current line continues in the next one too
+                if len(line) > 1 and line[-2] == '\\':
+                    prepend_to_line += line[:-2]
+                    continue
 
-            #load the Kconf files
-            if line[:7] == 'source ':
-                line = line[7:-1]
-                if line.startswith('"'):
-                    line = line[1:-1]
-                    kconf_info_list += load_kconf_info(line)
-                continue
+                #load the Kconf files
+                if line[:7] == 'source ':
+                    line = line[7:-1]
+                    if line.startswith('"'):
+                        line = line[1:-1]
+                        kconf_info_list += load_kconf_info(line)
+                    continue
 
-            #start a config block
-            def start_config_block():
-                nonlocal is_config_block, is_menu
-                is_config_block = True
-                kconf_info_list.append([])
-                is_menu = False
-            if line[:7] == 'config ':
-                start_config_block()
-                kconf_info_list[-1].append(line[7:-1])
-            elif line[:11] == 'menuconfig ':
-                start_config_block()
-                kconf_info_list[-1].append(line[11:-1])
-            elif line[:3] == 'if ' or line[:5] == 'endif' or line[:6] == 'choice' or line[:9] == 'endchoice':
-                start_config_block()
-                kconf_info_list[-1].append(line[:-1])
+                #start a config block
+                def start_config_block():
+                    nonlocal is_config_block, is_menu
+                    is_config_block = True
+                    kconf_info_list.append([])
+                    is_menu = False
+                if line[:7] == 'config ':
+                    start_config_block()
+                    kconf_info_list[-1].append(line[7:-1])
+                elif line[:11] == 'menuconfig ':
+                    start_config_block()
+                    kconf_info_list[-1].append(line[11:-1])
+                elif line[:3] == 'if ' or line[:5] == 'endif' or line[:6] == 'choice' or line[:9] == 'endchoice':
+                    start_config_block()
+                    kconf_info_list[-1].append(line[:-1])
 
-            #deal with menu blocks
-            elif line[:5] == 'menu ':
-                is_menu = True
-                menu_conditions.append(0)
-            elif line[:7] == 'endmenu':
-                for i in range(menu_conditions[-1]):
-                    kconf_info_list.append(['endif'])   
-                menu_conditions.pop()
-            elif is_menu == True and line[:9] == '\tdepends ':
-                kconf_info_list.append(['if ' + line[12:-1]])
-                menu_conditions[-1] += 1
+                #deal with menu blocks
+                elif line[:5] == 'menu ':
+                    is_menu = True
+                    menu_conditions.append(0)
+                elif line[:7] == 'endmenu':
+                    for i in range(menu_conditions[-1]):
+                        kconf_info_list.append(['endif'])   
+                    menu_conditions.pop()
+                elif is_menu == True and line[:9] == '\tdepends ':
+                    kconf_info_list.append(['if ' + line[12:-1]])
+                    menu_conditions[-1] += 1
 
-            #deal with non config block
-            elif not is_config_block:
-                pass
-            elif line[:8] == 'comment ':
-                is_menu = False
-                is_config_block = False
+                #deal with non config block
+                elif not is_config_block:
+                    pass
+                elif line[:8] == 'comment ':
+                    is_menu = False
+                    is_config_block = False
 
-            #store select and depends statements
-            elif line[:8] =='\tselect ' or line[:9] == '\tdepends ':
-                kconf_info_list[-1].append(line[:-1])
+                #store select and depends statements
+                elif line[:8] =='\tselect ' or line[:9] == '\tdepends ':
+                    kconf_info_list[-1].append(line[:-1])
         return kconf_info_list
+    else:
+        print('Invalid kconf_path value "' + kconf_path + '". Make sure kpath points to a valid Kconfig file.')
 
 
 class PossibleLists:
@@ -398,7 +403,7 @@ else:
 if deps.unsatisfied_options:
     print('Unsatisfied options: ' + ', '.join(deps.unsatisfied_options))
 if options_to_add:
-    print('Options that will be added in the kernel config are: '+ ', '.join(options_to_add))
+    print('Options that will be added in the kernel config are: ' + ', '.join(options_to_add))
     if query_yes_no('Do you want to add these options in the kernel config?[y/n]:'):
         with open('/usr/src/linux/.config', 'a') as config_file:
             for option in options_to_add:

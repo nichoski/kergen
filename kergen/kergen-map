@@ -1,6 +1,8 @@
 #!/usr/bin/python
 
 import subprocess
+import glob
+import os
 
 class PCI_Modalias_info:
     def __init__(self, modalias):
@@ -96,32 +98,38 @@ class Device:
         return kernel_option
 
 
+def read_modalias(path):
+    lines = []
+    for fname in glob.glob(path):
+        with open(fname, 'r') as f:
+            lines += f.read().splitlines()
+    return lines
 def generate_device_kernel_options():
     #pci
-    sys_pci_info_list = subprocess.check_output('cat /sys/bus/pci/devices/*/modalias', shell=True, universal_newlines=True)
-    sys_pci_info_list = sys_pci_info_list.split('\n')
+    sys_pci_info_list = read_modalias('/sys/bus/pci/devices/*/modalias')
     sys_pci_info_list = [PCI_Modalias_info(line) for line in sys_pci_info_list if line]
     #usb
-    sys_usb_info_list = subprocess.check_output('cat /sys/bus/usb/devices/*/modalias', shell=True, universal_newlines=True)
-    sys_usb_info_list = sys_usb_info_list.split('\n')
+    sys_usb_info_list = read_modalias('/sys/bus/usb/devices/*/modalias')
     sys_usb_info_list = [USB_Modalias_info(line) for line in sys_usb_info_list if line]
     #scsi
-    sys_scsi_info_list = subprocess.check_output('cat /sys/block/*/device/modalias', shell=True, universal_newlines=True)
-    sys_scsi_info_list = sys_scsi_info_list.split('\n')
+    sys_scsi_info_list = read_modalias('/sys/block/*/device/modalias')
     sys_scsi_info_list = [SCSI_Modalias_info(line) for line in sys_scsi_info_list if line and 'scsi:' in line]
 
     #generating the kernel modules info
     all_pci_modules_list = []
     all_usb_modules_list = []
     all_scsi_modules_list = []
-    with open('/usr/share/kergen/modules.alias', 'r') as module_alias:
-        for line in module_alias:
-            if line[6:10] == 'usb:':
-                all_usb_modules_list.append(USB_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))
-            elif line[6:10] == 'pci:':
-                all_pci_modules_list.append(PCI_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))
-            elif line[6:11] == 'scsi:':
-                all_scsi_modules_list.append(SCSI_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))
+    if os.path.isfile('/usr/share/kergen/modules.alias'):
+        with open('/usr/share/kergen/modules.alias', 'r') as module_alias:
+            for line in module_alias:
+                if line[6:10] == 'usb:':
+                    all_usb_modules_list.append(USB_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))
+                elif line[6:10] == 'pci:':
+                    all_pci_modules_list.append(PCI_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))
+                elif line[6:11] == 'scsi:':
+                    all_scsi_modules_list.append(SCSI_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))
+    else:
+        print('Can not find /usr/share/kergen/modules.alias. Did you install the package?')
 
     #generating the devices
     devices = []
@@ -144,28 +152,34 @@ def generate_device_kernel_options():
     return kernel_options
 
 def load_possible_filesystems(kpath):
-    with open('/usr/src/linux/' + kpath, 'r') as kconf:
-        kconf_options_list = []
+    if os.path.isfile('/usr/src/linux/' + kpath):
+        with open('/usr/src/linux/' + kpath, 'r') as kconf:
+            kconf_options_list = []
 
-        for line in kconf:
-            #load the Kconf files
-            if line[:7] == 'source ':
-                line = line[7:-1]
-                if line.startswith('"'):
-                    line = line[1:-1]
-                    kconf_options_list += load_possible_filesystems(line)
+            for line in kconf:
+                #load the Kconf files
+                if line[:7] == 'source ':
+                    line = line[7:-1]
+                    if line.startswith('"'):
+                        line = line[1:-1]
+                        kconf_options_list += load_possible_filesystems(line)
 
-            elif line[:7] == 'config ' and line[-4:-1] == '_FS':
-                kconf_options_list.append(line[7:-4].lower())
+                elif line[:7] == 'config ' and line[-4:-1] == '_FS':
+                    kconf_options_list.append(line[7:-4].lower())
 
-        return kconf_options_list
+            return kconf_options_list
+    else:
+        print('Invalid kpath value "' + kpath + '". Make sure kpath points to a valid Kconfig file.')
 
 def generate_file_system_kernel_options():
     possible_file_systems = load_possible_filesystems('arch/x86/Kconfig')
-    mounted_fs_info = subprocess.check_output(['cat', '/proc/mounts'], universal_newlines=True)
-    mounted_file_systems_options = [filesystem.upper() + '_FS' for filesystem in possible_file_systems if ' ' + filesystem + ' ' in mounted_fs_info]
-    return(mounted_file_systems_options)
-
+    if os.path.isfile('/proc/mounts'):
+        with open('/proc/mounts') as proc_mounts:
+            mounted_fs_info = proc_mounts.read().replace('\n',' ')
+            mounted_file_systems_options = [filesystem.upper() + '_FS' for filesystem in possible_file_systems if ' ' + filesystem + ' ' in mounted_fs_info]
+            return(mounted_file_systems_options)
+    else:
+        print('/proc/mounts was not found. File system kernel options can not be added.')
 
 file_system_kernel_options = generate_file_system_kernel_options()
 device_kernel_options = generate_device_kernel_options()
