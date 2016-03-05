@@ -153,7 +153,7 @@ def generate_device_kernel_options():
 
 def load_possible_filesystems(kpath):
     if os.path.isfile('/usr/src/linux/' + kpath):
-        with open('/usr/src/linux/' + kpath, 'r') as kconf:
+        with open('/usr/src/linux/' + kpath, 'r', encoding='utf-8') as kconf:
             kconf_options_list = []
 
             for line in kconf:
