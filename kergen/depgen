@@ -10,7 +10,7 @@ args = parser.parse_args()
 
 config = []
 if os.path.isfile('/usr/src/linux/.config'):
-    with open('/usr/src/linux/.config', 'r') as conf:
+    with open('/usr/src/linux/.config', 'r', encoding='utf-8') as conf:
         for line in conf:
             if line[:1] != '#':
                 config.append(line[7:-3])
@@ -19,7 +19,7 @@ if os.path.isfile('/usr/src/linux/.config'):
 def load_kconf_info(kconf_path):
     kconf_info_list = []
     if os.path.isfile('/usr/src/linux/' + kconf_path):
-        with open('/usr/src/linux/' + kconf_path, 'r') as kconf:
+        with open('/usr/src/linux/' + kconf_path, 'r', encoding='utf-8') as kconf:
             prepend_to_line = ''
             is_config_block = False
             is_menu = False
