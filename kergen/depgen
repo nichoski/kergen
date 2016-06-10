@@ -340,7 +340,7 @@ class Depgen:
          for option in self.possible_lists[:]:
             for line in option.lines[:]:       
                 if neg_dependency in line:
-                    option.remove(line)
+                    option.lines.remove(line)
 
     #checks self.possible_lists for any conflicting dependencies of options
     def validate_possible_lists_against_itself(self):
