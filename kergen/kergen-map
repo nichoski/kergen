@@ -1,9 +1,20 @@
 #!/usr/bin/python
 import subprocess
 import glob
-import os
+
 
 class Device:
+    def get_options_from_db(self, devices_database):
+        """Finds device matches from a devices_database
+        and uses them to get kernel config options."""
+        options = set()
+        for db_device in devices_database:
+            if self.compare_to(db_device):
+                option = db_device.get_kernel_option()
+                if option:
+                    options.add(option)
+        return options
+
     def get_kernel_option(self):
         """Searches the kernel sources for a config option
         based on a known module name"""
@@ -21,17 +32,6 @@ class Device:
         else:
             kernel_option = None
         return kernel_option
-
-    def get_options_from_db(self, devices_database):
-        """Finds device matches from a devices_database
-        and uses them to get kernel config options."""
-        options = set()
-        for db_device in devices_database:
-            if self.compare_to(db_device):
-                option = db_device.get_kernel_option()
-                if option:
-                    options.add(option)
-        return options
 
 
 class PCIDevice(Device):
