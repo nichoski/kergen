@@ -1,188 +1,328 @@
 #!/usr/bin/python
-
 import subprocess
 import glob
 import os
 
-class PCI_Modalias_info:
-    def __init__(self, modalias):
-        self.modalias = modalias.replace('*','').replace('pci:','')
-        self.vendor = self.modalias[self.modalias.find('v')+1:self.modalias.find('d')]
-        self.device = self.modalias[self.modalias.find('d')+1:self.modalias.find('sv')]
-        self.subvendor = self.modalias[self.modalias.find('sv')+2:self.modalias.find('sd')]
-        self.subdevice = self.modalias[self.modalias.find('sd')+2:self.modalias.find('bc')]
-        self.bus_class = self.modalias[self.modalias.find('bc')+2:self.modalias.find('sc')]
-        self.bus_subclass = self.modalias[self.modalias.find('sc')+2:self.modalias.find('i')]
-        self.interface = self.modalias[self.modalias.find('i')+1:]
-
-    def compare_to(self, other):
-        if not other.vendor or other.vendor in self.vendor:
-            if not other.device or other.device in self.device:
-                if not other.subvendor or other.subvendor in self.subvendor:
-                    if not other.subdevice or other.subdevice in self.subdevice:
-                        if not other.bus_class or other.bus_class in self.bus_class:
-                            if not other.bus_subclass or other.bus_subclass in self.bus_subclass:
-                                if not other.interface or other.interface in self.interface:
-                                    return True
-        return False
-
-
-class USB_Modalias_info:
-    def __init__(self, modalias):
-        self.modalias = modalias.replace('*','').replace('usb:','')
-        self.device_vendor = self.modalias[self.modalias.find('v')+1:self.modalias.find('p')]
-        self.device_product = self.modalias[self.modalias.find('p')+1:self.modalias.find('d')]
-        self.bcdevice = self.modalias[self.modalias.find('d')+1:self.modalias.find('dc')]
-        self.device_class = self.modalias[self.modalias.find('dc')+2:self.modalias.find('dsc')]
-        self.device_subclass = self.modalias[self.modalias.find('dsc')+3:self.modalias.find('dp')]
-        self.device_protocol = self.modalias[self.modalias.find('dp')+2:self.modalias.find('ic')]
-        self.interface_class = self.modalias[self.modalias.find('ic')+2:self.modalias.find('isc')]
-        self.interface_subclass = self.modalias[self.modalias.find('isc')+3:self.modalias.find('ip')]
-        self.interface_protocol = self.modalias[self.modalias.find('ip')+2:]
-
-    def compare_to(self, other):
-        if not other.device_vendor or other.device_vendor in self.device_vendor:
-            if not other.device_product or other.device_product in self.device_product:
-                if not other.bcdevice or other.bcdevice in self.bcdevice:
-                    if not other.device_class or other.device_class in self.device_class:
-                        if not other.device_subclass or other.device_subclass in self.device_subclass:
-                            if not other.device_protocol or other.device_protocol in self.device_protocol:
-                                if not other.interface_class or other.interface_class in self.interface_class:
-                                    if not other.interface_subclass or other.interface_subclass in self.interface_subclass:
-                                        if not other.interface_protocol or other.interface_protocol in self.interface_protocol:
-                                            return True
-        return False
-
-
-class SCSI_Modalias_info:
-    def __init__(self, modalias):
-        self.modalias = modalias.replace('*','')
-
-    def compare_to(self, other):
-        if not other.modalias or other.modalias in self.modalias:
-            return True
-        return False
-
-
-class SCSI_Module:
-    def __init__(self, modalias, module):
-        self.modalias = SCSI_Modalias_info(modalias)
-        self.module = module
-
-
-class PCI_Module:
-    def __init__(self, modalias, module):
-        self.modalias = PCI_Modalias_info(modalias)
-        self.module = module
-
-
-class USB_Module:
-    def __init__(self, modalias, module):
-        self.modalias = USB_Modalias_info(modalias)
-        self.module = module
-
 class Device:
-    def __init__(self, module):
-        self.module = module.replace('_', '-')
-        self.kernel_option = self.get_kernel_option()
-
-        if not self.kernel_option and '-' in self.module:
-            self.module = module.replace('-','_')
-            self.kernel_option = self.get_kernel_option()
-
     def get_kernel_option(self):
-        grep_command = 'grep -Ri --include Makefile " ' + self.module + '\.o" /usr/src/linux/|grep CONFIG_ || true'
-        kernel_option = subprocess.check_output(grep_command, shell=True, universal_newlines=True)
-        if kernel_option:
-            kernel_option = kernel_option[kernel_option.rfind('(')+1:kernel_option.rfind(')')] 
+        """Searches the kernel sources for a config option
+        based on a known module name"""
+        module_with_hypens = self.module.replace('_','-')
+        module_with_underscores = self.module.replace('-','_')
+        grep_command = ('grep -Ri --include Makefile " {}\.o" '
+            '/usr/src/linux/|grep CONFIG_ || grep -Ri --include '
+            'Makefile " {}\.o" /usr/src/linux/|grep CONFIG_ || true')\
+            .format(module_with_hypens, module_with_underscores)
+        grep_results = subprocess.check_output(
+            grep_command, shell=True, universal_newlines=True)
+        if grep_results:
+            kernel_option = grep_results[
+                grep_results.rfind('(')+1:grep_results.rfind(')')]
+        else:
+            kernel_option = None
         return kernel_option
 
+    def get_options_from_db(self, devices_database):
+        """Finds device matches from a devices_database
+        and uses them to get kernel config options."""
+        options = set()
+        for db_device in devices_database:
+            if self.compare_to(db_device):
+                option = db_device.get_kernel_option()
+                if option:
+                    options.add(option)
+        return options
 
-def read_modalias(path):
-    lines = []
-    for fname in glob.glob(path):
-        with open(fname, 'r') as f:
-            lines += f.read().splitlines()
-    return lines
-def generate_device_kernel_options():
-    #pci
-    sys_pci_info_list = read_modalias('/sys/bus/pci/devices/*/modalias')
-    sys_pci_info_list = [PCI_Modalias_info(line) for line in sys_pci_info_list if line]
-    #usb
-    sys_usb_info_list = read_modalias('/sys/bus/usb/devices/*/modalias')
-    sys_usb_info_list = [USB_Modalias_info(line) for line in sys_usb_info_list if line]
-    #scsi
-    sys_scsi_info_list = read_modalias('/sys/block/*/device/modalias')
-    sys_scsi_info_list = [SCSI_Modalias_info(line) for line in sys_scsi_info_list if line and 'scsi:' in line]
 
-    #generating the kernel modules info
-    all_pci_modules_list = []
-    all_usb_modules_list = []
-    all_scsi_modules_list = []
-    if os.path.isfile('/usr/share/kergen/modules.alias'):
-        with open('/usr/share/kergen/modules.alias', 'r') as module_alias:
+class PCIDevice(Device):
+    def __init__(self, modalias, module=''):
+        self.modalias = modalias.replace('*','').replace('pci:','')
+        self.module = module
+        self.vendor = self.get_vendor_from_modalias()
+        self.device = self.get_device_from_modalias()
+        self.subvendor = self.get_subvendor_from_modalias()
+        self.subdevice = self.get_subdevice_from_modalias()
+        self.bus_class = self.get_bus_class_from_modalias()
+        self.bus_subclass = self.get_bus_subclass_from_modalias()
+        self.interface = self.get_interface_from_modalias()
+
+    def get_vendor_from_modalias(self):
+        return self.modalias[self.modalias.find('v')+1:self.modalias.find('d')]
+
+    def get_device_from_modalias(self):
+        return self.modalias[
+            self.modalias.find('d')+1:self.modalias.find('sv')]
+
+    def get_subvendor_from_modalias(self):
+        return self.modalias[
+            self.modalias.find('sv')+2:self.modalias.find('sd')]
+
+    def get_subdevice_from_modalias(self):
+        return self.modalias[
+            self.modalias.find('sd')+2:self.modalias.find('bc')]
+
+    def get_bus_class_from_modalias(self):
+        return self.modalias[
+            self.modalias.find('bc')+2:self.modalias.find('sc')]
+
+    def get_bus_subclass_from_modalias(self):
+        return self.modalias[
+            self.modalias.find('sc')+2:self.modalias.find('i')]
+
+    def get_interface_from_modalias(self):
+        return self.modalias[self.modalias.find('i')+1:]
+
+    def compare_to(self, db_device):
+        """Checks if db_device is referring to the same hardware device.
+        Useful because db_device will also have
+        the module attribute available."""
+        return db_device.vendor in self.vendor \
+           and db_device.device in self.device \
+           and db_device.subvendor in self.subvendor \
+           and db_device.subdevice in self.subdevice \
+           and db_device.bus_class in self.bus_class \
+           and db_device.bus_subclass in self.bus_subclass \
+           and db_device.interface in self.interface
+
+
+class USBDevice(Device):
+    def __init__(self, modalias, module=''):
+        self.modalias = modalias.replace('*','').replace('usb:','')
+        self.module = module
+        self.device_vendor = self.get_device_vendor()
+        self.device_product = self.get_device_product()
+        self.bcdevice = self.get_bcdevice()
+        self.device_class = self.get_device_class()
+        self.device_subclass = self.get_device_subclass()
+        self.device_protocol = self.get_device_protocol()
+        self.interface_class = self.get_interface_class()
+        self.interface_subclass = self.get_interface_subclass()
+        self.interface_protocol = self.get_interface_protocol()
+
+    def get_device_vendor(self):
+        return self.modalias[self.modalias.find('v')+1:self.modalias.find('p')]
+
+    def get_device_product(self):
+        return self.modalias[self.modalias.find('p')+1:self.modalias.find('d')]
+
+    def get_bcdevice(self):
+        return self.modalias[
+            self.modalias.find('d')+1:self.modalias.find('dc')]
+
+    def get_device_class(self):
+        return self.modalias[
+            self.modalias.find('dc')+2:self.modalias.find('dsc')]
+
+    def get_device_subclass(self):
+        return self.modalias[
+            self.modalias.find('dsc')+3:self.modalias.find('dp')]
+
+    def get_device_protocol(self):
+        return self.modalias[
+            self.modalias.find('dp')+2:self.modalias.find('ic')]
+
+    def get_interface_class(self):
+        return self.modalias[
+            self.modalias.find('ic')+2:self.modalias.find('isc')]
+
+    def get_interface_subclass(self):
+        return self.modalias[
+            self.modalias.find('isc')+3:self.modalias.find('ip')]
+
+    def get_interface_protocol(self):
+        return self.modalias[self.modalias.find('ip')+2:]
+
+    def compare_to(self, db_device):
+        """Checks if db_device is referring to the same hardware device.
+        Useful because db_device will also have
+        the module attribute available."""
+        return db_device.device_vendor in self.device_vendor \
+            and db_device.device_product in self.device_product \
+            and db_device.bcdevice in self.bcdevice \
+            and db_device.device_class in self.device_class \
+            and db_device.device_subclass in self.device_subclass \
+            and db_device.device_protocol in self.device_protocol \
+            and db_device.interface_class in self.interface_class \
+            and db_device.interface_subclass in self.interface_subclass \
+            and db_device.interface_protocol in self.interface_protocol
+
+
+class SCSIDevice(Device):
+    def __init__(self, modalias, module=''):
+        self.modalias = modalias.replace('*','')
+        self.module = module
+
+    def compare_to(self, db_device):
+        """Checks if db_device is referring to the same hardware device.
+        Useful because db_device will also have
+        the module attribute available."""
+        return db_device.modalias in self.modalias
+
+
+class KernelOptionsGenerator:
+    """Generates kernel options needed for the system."""
+    def __init__(self):
+        self.pci_device_options = self.get_pci_device_options()
+        self.usb_device_options = self.get_usb_device_options()
+        self.scsi_device_options = self.get_scsi_device_options()
+        self.file_system_options = self.get_file_system_options()
+
+    def get_all_options_string(self):
+        all_options = \
+              self.pci_device_options \
+            | self.usb_device_options \
+            | self.scsi_device_options \
+            | self.file_system_options
+        return ' '.join(all_options)
+
+    def get_pci_device_options(self):
+        """Returns a set of PCI device kernel options
+        needed for this system."""
+        sys_pci_devices = self.get_sys_pci_devices()
+        pci_devices_database = self.get_pci_devices_database()
+        return self.get_options_from_db(sys_pci_devices, pci_devices_database)
+
+    def get_sys_pci_devices(self):
+        sys_pci_lines = self.read_modalias('/sys/bus/pci/devices/*/modalias')
+        return {PCIDevice(line) for line in sys_pci_lines if line}
+
+    def read_modalias(self, path):
+        lines = set()
+        for file_name in glob.glob(path):
+            with open(file_name, 'r', encoding='utf-8') as file:
+                lines.update(file.read().splitlines())
+        return lines
+
+    def get_pci_devices_database(self):
+        pci_devices_database = set()
+        path = '/usr/share/kergen/modules.alias'
+        with open(path, 'r', encoding='utf-8') as module_alias:
             for line in module_alias:
-                if line[6:10] == 'usb:':
-                    all_usb_modules_list.append(USB_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))
-                elif line[6:10] == 'pci:':
-                    all_pci_modules_list.append(PCI_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))
-                elif line[6:11] == 'scsi:':
-                    all_scsi_modules_list.append(SCSI_Module(line[6:line.rfind(' ')], line[line.rfind(' ')+1:-1]))
-    else:
-        print('Can not find /usr/share/kergen/modules.alias. Did you install the package?')
+                if self.is_pci_modalias_line(line):
+                    pci_device = self.get_pci_device_from_modules_alias(line)
+                    pci_devices_database.add(pci_device)
+        return pci_devices_database
 
-    #generating the devices
-    devices = []
-    for sys_pci_info in sys_pci_info_list:
-        for pci_module in all_pci_modules_list:
-            if sys_pci_info.compare_to(pci_module.modalias):
-                devices.append(Device(pci_module.module))
-    for sys_usb_info in sys_usb_info_list:
-        for usb_module in all_usb_modules_list:
-            if sys_usb_info.compare_to(usb_module.modalias):
-                devices.append(Device(usb_module.module))
-    for sys_scsi_info in sys_scsi_info_list:
-        for scsi_module in all_scsi_modules_list:
-            if sys_scsi_info.compare_to(scsi_module.modalias):
-                devices.append(Device(scsi_module.module))
+    def is_pci_modalias_line(self, line):
+        return line[6:10] == 'pci:'
 
-    #generating kernel options list
-    kernel_options = [device.kernel_option for device in devices]
+    def get_pci_device_from_modules_alias(self, line):
+        modalias = line[6:line.rfind(' ')]
+        module = line[line.rfind(' ')+1:-1]
+        return PCIDevice(modalias, module)
 
-    return kernel_options
+    def get_options_from_db(self, sys_devices, devices_database):
+        options = set()
+        for sys_device in sys_devices:
+            options.update(sys_device.get_options_from_db(devices_database))
+        return options
 
-def load_possible_filesystems(kpath):
-    if os.path.isfile('/usr/src/linux/' + kpath):
-        with open('/usr/src/linux/' + kpath, 'r', encoding='utf-8') as kconf:
-            kconf_options_list = []
+    def get_usb_device_options(self):
+        """Returns a set of USB device kernel options
+        needed for this system."""
+        sys_usb_devices = self.get_sys_usb_devices()
+        usb_devices_database = self.get_usb_devices_database()
+        return self.get_options_from_db(sys_usb_devices, usb_devices_database)
 
-            for line in kconf:
-                #load the Kconf files
-                if line[:7] == 'source ':
-                    line = line[7:-1]
-                    if line.startswith('"'):
-                        line = line[1:-1]
-                        kconf_options_list += load_possible_filesystems(line)
+    def get_sys_usb_devices(self):
+        sys_usb_lines = self.read_modalias('/sys/bus/usb/devices/*/modalias')
+        return {USBDevice(line) for line in sys_usb_lines if line}
 
-                elif line[:7] == 'config ' and line[-4:-1] == '_FS':
-                    kconf_options_list.append(line[7:-4].lower())
+    def get_usb_devices_database(self):
+        usb_devices_database = set()
+        path = '/usr/share/kergen/modules.alias'
+        with open(path, 'r', encoding='utf-8') as modules_alias:
+            for line in modules_alias:
+                if self.is_usb_modalias_line(line):
+                    usb_device = self.get_usb_device_from_modules_alias(line)
+                    usb_devices_database.add(usb_device)
+        return usb_devices_database
 
-            return kconf_options_list
-    else:
-        print('Invalid kpath value "' + kpath + '". Make sure kpath points to a valid Kconfig file.')
+    def is_usb_modalias_line(self, line):
+        return line[6:10] == 'usb:'
 
-def generate_file_system_kernel_options():
-    possible_file_systems = load_possible_filesystems('arch/x86/Kconfig')
-    if os.path.isfile('/proc/mounts'):
+    def get_usb_device_from_modules_alias(self, line):
+        modalias = line[6:line.rfind(' ')]
+        module = line[line.rfind(' ')+1:-1]
+        return USBDevice(modalias, module)
+
+    def get_scsi_device_options(self):
+        """Returns a set of SCSI device kernel options
+        needed for this system."""
+        sys_scsi_devices = self.get_sys_scsi_devices()
+        scsi_devices_database = self.get_scsi_devices_database()
+        return self.get_options_from_db(
+            sys_scsi_devices, scsi_devices_database)
+
+    def get_sys_scsi_devices(self):
+        sys_scsi_lines = self.read_modalias('/sys/block/*/device/modalias')
+        return {SCSIDevice(line) for line in sys_scsi_lines if line}
+
+    def get_scsi_devices_database(self):
+        scsi_devices_database = set()
+        path = '/usr/share/kergen/modules.alias'
+        with open(path, 'r', encoding='utf-8') as modules_alias:
+            for line in modules_alias:
+                if self.is_scsi_modalias_line(line):
+                    scsi_device = self.get_scsi_device_from_modules_alias(line)
+                    scsi_devices_database.add(scsi_device)
+        return scsi_devices_database
+
+    def is_scsi_modalias_line(self, line):
+        return line[6:11] == 'scsi:'
+
+    def get_scsi_device_from_modules_alias(self, line):
+        modalias = line[6:line.rfind(' ')]
+        module = line[line.rfind(' ')+1:-1]
+        return SCSIDevice(modalias, module)
+
+    def get_file_system_options(self):
+        """Returns a set of file system device kernel options
+        needed for this system."""
         with open('/proc/mounts') as proc_mounts:
-            mounted_fs_info = proc_mounts.read().replace('\n',' ')
-            mounted_file_systems_options = [filesystem.upper() + '_FS' for filesystem in possible_file_systems if ' ' + filesystem + ' ' in mounted_fs_info]
-            return(mounted_file_systems_options)
-    else:
-        print('/proc/mounts was not found. File system kernel options can not be added.')
+            return self.get_mounted_fs_options(proc_mounts)
 
-file_system_kernel_options = generate_file_system_kernel_options()
-device_kernel_options = generate_device_kernel_options()
-all_options = device_kernel_options + file_system_kernel_options
-all_options = list(set(all_options))
-print(' '.join(all_options))
+    def get_mounted_fs_options(self, proc_mounts):
+        possible_file_systems = self.get_possible_filesystems()
+        mounted_fs_info = proc_mounts.read()
+        mounted_fs_options = {
+            filesystem + '_FS' \
+            for filesystem in possible_file_systems \
+            if ' ' + filesystem.lower() + ' ' in mounted_fs_info}
+        return mounted_fs_options
+
+    def get_possible_filesystems(self, kconfig_path='fs/Kconfig'):
+        kconfig_full_path = '/usr/src/linux/' + kconfig_path
+        with open(kconfig_full_path, 'r', encoding='utf-8') as kconfig:
+            return self.get_kconfig_options(kconfig)
+        return set()
+
+    def get_kconfig_options(self, kconfig):
+        kconfig_options = set()
+        for line in kconfig:
+            if self.is_kconfig_path(line):
+                sub_kconfig_path = self.get_sub_kconfig_path(line)
+                kconfig_options.update(
+                    self.get_possible_filesystems(sub_kconfig_path))
+            elif self.is_file_system_option(line):
+                option = self.get_file_system_option(line)
+                kconfig_options.add(option)
+        return kconfig_options
+
+    def is_kconfig_path(self, line):
+        return line[:7] == 'source '
+
+    def get_sub_kconfig_path(self, line):
+        return line[7:-1].strip('"')
+
+    def is_file_system_option(self, line):
+        return line[:7] == 'config ' and line[-4:-1] == '_FS'
+
+    def get_file_system_option(self, line):
+        return line[7:-4]
+
+
+if __name__ == '__main__':
+    kernel_options_generator = KernelOptionsGenerator()
+    all_options_string = kernel_options_generator.get_all_options_string()
+    print(all_options_string)
